@@ -1,5 +1,7 @@
 import {
   Account,
+  AccountSubtype,
+  AccountType,
   FinancialEntity,
   FinancialNote,
   ImportReconciliationSummary,
@@ -10,6 +12,115 @@ import {
 } from '../types';
 import { cleanMerchantName } from './normalization';
 import { parseFinancialAmount } from './plaidParser';
+
+const SINGLE_AMOUNT_FIELDS = ['raw_amount', 'amount', 'normalized_amount', 'tx_amount', 'transaction_amount'] as const;
+
+function isBlank(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && value.trim() === '');
+}
+
+function firstPresent(row: Record<string, any>, keys: string[]): any {
+  for (const key of keys) {
+    if (!isBlank(row[key])) return row[key];
+  }
+  return undefined;
+}
+
+function isNumericAmount(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value !== 'string') return false;
+  const digits = value
+    .trim()
+    .replace(/\s*(CR|DR)$/i, '')
+    .replace(/^(USD|EUR|GBP)\s*/i, '')
+    .replace(/[$€£,\s()%+-]/g, '');
+  return /^(\d+(\.\d*)?|\.\d+)$/.test(digits);
+}
+
+function parseOptionalNumber(value: unknown): number | undefined {
+  if (isBlank(value) || !isNumericAmount(value)) return undefined;
+  return parseFinancialAmount(value as string | number);
+}
+
+/**
+ * Resolves the signed amount of a row (positive = outflow, negative = inflow).
+ * Separate debit/credit columns take precedence; blank cells are skipped rather than
+ * short-circuiting. Returns null when no valid amount exists or both debit and credit
+ * are non-zero (ambiguous).
+ */
+export function extractAmount(row: Record<string, any>): { value: number; field: string } | null {
+  const hasDebit = !isBlank(row.debit);
+  const hasCredit = !isBlank(row.credit);
+  if (hasDebit || hasCredit) {
+    if ((hasDebit && !isNumericAmount(row.debit)) || (hasCredit && !isNumericAmount(row.credit))) return null;
+    const debit = hasDebit ? Math.abs(parseFinancialAmount(row.debit)) : 0;
+    const credit = hasCredit ? Math.abs(parseFinancialAmount(row.credit)) : 0;
+    if (debit !== 0 && credit !== 0) return null;
+    if (credit !== 0) return { value: -credit, field: 'credit' };
+    return { value: debit, field: hasDebit ? 'debit' : 'credit' };
+  }
+
+  for (const field of SINGLE_AMOUNT_FIELDS) {
+    const raw = row[field];
+    if (isBlank(raw)) continue;
+    if (!isNumericAmount(raw)) return null;
+    const value = parseFinancialAmount(raw);
+    // normalized_amount uses the inverse convention (negative = outflow)
+    return { value: field === 'normalized_amount' && value !== 0 ? -value : value, field };
+  }
+  return null;
+}
+
+interface AccountKind {
+  type: AccountType;
+  subtype: AccountSubtype;
+}
+
+const CREDIT_TOKENS = new Set(['credit', 'credit_card', 'charge_card', 'card']);
+const LINE_OF_CREDIT_TOKENS = new Set(['line_of_credit', 'loc', 'heloc', 'business_line_of_credit']);
+const LOAN_TOKENS = new Set(['loan', 'term_loan', 'sba', 'sba_loan', 'mortgage', 'student', 'auto', 'commercial', 'home_equity', 'personal_loan', 'commercial_loan']);
+const INVESTMENT_TOKENS = new Set(['investment', 'brokerage', 'retirement', 'ira', 'roth', '401k', '403b', '457b', 'roth_401k', '529']);
+const CHECKING_TOKENS = new Set(['checking', 'cash_management', 'prepaid', 'paypal']);
+const SAVINGS_TOKENS = new Set(['savings', 'money_market', 'cd', 'share']);
+
+function loanKind(lowerName: string, token = ''): AccountKind {
+  if (token === 'sba' || token === 'sba_loan' || /\bsba\b/.test(lowerName)) return { type: 'loan', subtype: 'sba_loan' };
+  if (LINE_OF_CREDIT_TOKENS.has(token) || /\b(line\s*of\s*credit|heloc)\b/.test(lowerName)) return { type: 'loan', subtype: 'line_of_credit' };
+  return { type: 'loan', subtype: 'term_loan' };
+}
+
+/**
+ * Determines account type from explicit type/subtype/category columns first (including
+ * Plaid's `type`/`subtype`), then structured credit signals, then the account name.
+ */
+function resolveSnapshotAccountKind(row: Record<string, any>, name: string, creditLimit: number | undefined): AccountKind {
+  const lowerName = name.toLowerCase();
+  const depository = (subtype?: AccountSubtype): AccountKind => ({
+    type: 'depository',
+    subtype: subtype ?? (/\b(savings|share|money\s*market)\b/.test(lowerName) ? 'savings' : 'checking'),
+  });
+
+  const tokens = [row.account_type, row.account_subtype, row.subtype, row.type, row.category]
+    .filter((v) => !isBlank(v))
+    .map((v) => String(v).trim().toLowerCase().replace(/[\s-]+/g, '_'));
+
+  for (const token of tokens) {
+    if (CREDIT_TOKENS.has(token)) return { type: 'credit', subtype: 'credit_card' };
+    if (LINE_OF_CREDIT_TOKENS.has(token) || LOAN_TOKENS.has(token)) return loanKind(lowerName, token);
+    if (INVESTMENT_TOKENS.has(token)) return { type: 'investment', subtype: 'brokerage' };
+    if (CHECKING_TOKENS.has(token)) return depository('checking');
+    if (SAVINGS_TOKENS.has(token)) return depository('savings');
+    if (token === 'depository') return depository();
+  }
+
+  if (row.card_name !== undefined || creditLimit !== undefined) return { type: 'credit', subtype: 'credit_card' };
+  if (/\b(checking|savings|share|money\s*market)\b/.test(lowerName)) return depository();
+  if (/\b(line\s*of\s*credit|heloc|sba|loan|mortgage)\b/.test(lowerName)) return loanKind(lowerName);
+  if (lowerName.includes('card') || (lowerName.includes('credit') && !/credit\s*union/.test(lowerName))) {
+    return { type: 'credit', subtype: 'credit_card' };
+  }
+  return depository();
+}
 
 export interface ParseRecordTypeOptions {
   existingTransactionIds?: Set<string>;
@@ -151,35 +262,10 @@ export function parseRecordTypeContent(
   let rawTotalCredits = 0;
 
   for (const row of rows) {
-    const nr = normalizeKeys(row);
-    if (nr.debit !== undefined && nr.debit !== '') {
-      const val = parseFinancialAmount(nr.debit);
-      if (val !== 0) rawTotalDebits += Math.abs(val);
-    }
-    if (nr.credit !== undefined && nr.credit !== '') {
-      const val = parseFinancialAmount(nr.credit);
-      if (val !== 0) rawTotalCredits += Math.abs(val);
-    }
-    if (nr.amount !== undefined && nr.amount !== '' && nr.debit === undefined && nr.credit === undefined) {
-      const val = parseFinancialAmount(nr.amount);
-      if (val > 0) rawTotalDebits += val;
-      else if (val < 0) rawTotalCredits += Math.abs(val);
-    }
-    if (nr.raw_amount !== undefined && nr.raw_amount !== '' && nr.amount === undefined && nr.debit === undefined && nr.credit === undefined) {
-      const val = parseFinancialAmount(nr.raw_amount);
-      if (val > 0) rawTotalDebits += val;
-      else if (val < 0) rawTotalCredits += Math.abs(val);
-    }
-    if (nr.normalized_amount !== undefined && nr.normalized_amount !== '' && nr.raw_amount === undefined && nr.amount === undefined && nr.debit === undefined && nr.credit === undefined) {
-      const val = parseFinancialAmount(nr.normalized_amount);
-      if (val < 0) rawTotalDebits += Math.abs(val);
-      else if (val > 0) rawTotalCredits += val;
-    }
-    if (nr.tx_amount !== undefined && nr.tx_amount !== '' && nr.normalized_amount === undefined && nr.raw_amount === undefined && nr.amount === undefined && nr.debit === undefined && nr.credit === undefined) {
-      const val = parseFinancialAmount(nr.tx_amount);
-      if (val > 0) rawTotalDebits += val;
-      else if (val < 0) rawTotalCredits += Math.abs(val);
-    }
+    const extracted = extractAmount(normalizeKeys(row));
+    if (!extracted) continue;
+    if (extracted.value > 0) rawTotalDebits += extracted.value;
+    else if (extracted.value < 0) rawTotalCredits += Math.abs(extracted.value);
   }
 
   // 2. Process each row into its strict table
@@ -345,45 +431,8 @@ export function parseRecordTypeContent(
         }
 
         // Amount parsing & validation
-        let parsedAmount = 0;
-        let hasAmountField = false;
-
-        if (normalizedRow.debit !== undefined && normalizedRow.debit !== '') {
-          const val = parseFinancialAmount(normalizedRow.debit);
-          if (val !== 0) parsedAmount = Math.abs(val);
-          hasAmountField = true;
-        }
-        if (normalizedRow.credit !== undefined && normalizedRow.credit !== '') {
-          const val = parseFinancialAmount(normalizedRow.credit);
-          if (val !== 0) parsedAmount = -Math.abs(val);
-          hasAmountField = true;
-        }
-        if (!hasAmountField && normalizedRow.raw_amount !== undefined && normalizedRow.raw_amount !== '') {
-          parsedAmount = parseFinancialAmount(normalizedRow.raw_amount);
-          hasAmountField = true;
-        }
-        if (!hasAmountField && normalizedRow.amount !== undefined && normalizedRow.amount !== '') {
-          parsedAmount = parseFinancialAmount(normalizedRow.amount);
-          hasAmountField = true;
-        }
-        if (!hasAmountField && normalizedRow.normalized_amount !== undefined && normalizedRow.normalized_amount !== '') {
-          const normVal = parseFinancialAmount(normalizedRow.normalized_amount);
-          parsedAmount = normVal < 0 ? Math.abs(normVal) : -normVal;
-          hasAmountField = true;
-        }
-        if (!hasAmountField && normalizedRow.tx_amount !== undefined && normalizedRow.tx_amount !== '') {
-          parsedAmount = parseFinancialAmount(normalizedRow.tx_amount);
-          hasAmountField = true;
-        }
-        if (!hasAmountField && normalizedRow.transaction_amount !== undefined && normalizedRow.transaction_amount !== '') {
-          parsedAmount = parseFinancialAmount(normalizedRow.transaction_amount);
-          hasAmountField = true;
-        }
-
-        const rawAmountVal = normalizedRow.raw_amount ?? normalizedRow.amount ?? normalizedRow.debit ?? normalizedRow.credit ?? normalizedRow.normalized_amount ?? normalizedRow.tx_amount ?? normalizedRow.transaction_amount;
-        const isNumericString = rawAmountVal !== undefined && rawAmountVal !== '' && !isNaN(parseFloat(String(rawAmountVal).replace(/[$€£,\s()]/g, '')));
-
-        if (!hasAmountField || !isNumericString || isNaN(parsedAmount)) {
+        const extractedAmount = extractAmount(normalizedRow);
+        if (!extractedAmount) {
           summary.rejections.push({
             rowNumber,
             reason: `Rejected: Missing or invalid numeric amount in transaction.`,
@@ -392,6 +441,7 @@ export function parseRecordTypeContent(
           summary.rejectedCount++;
           return;
         }
+        const parsedAmount = extractedAmount.value;
 
         // Date validation
         const rawDate = (
@@ -595,18 +645,14 @@ export function parseRecordTypeContent(
             : normalizedRow.amount || 0;
         const currentBalance = typeof rawBal === 'number' ? rawBal : parseFinancialAmount(rawBal);
 
-        const rawAvail =
-          normalizedRow.reported_available_balance !== undefined && normalizedRow.reported_available_balance !== ''
-            ? normalizedRow.reported_available_balance
-            : normalizedRow.reported_available_credit !== undefined && normalizedRow.reported_available_credit !== ''
-            ? normalizedRow.reported_available_credit
-            : normalizedRow.available_balance ||
-              normalizedRow.availableBalance ||
-              normalizedRow.calculated_limit_minus_balance_if_not_reported;
-        const availableBalance =
-          rawAvail !== undefined && rawAvail !== null && rawAvail !== ''
-            ? typeof rawAvail === 'number' ? rawAvail : parseFinancialAmount(rawAvail)
-            : currentBalance;
+        const rawAvail = firstPresent(normalizedRow, [
+          'reported_available_balance',
+          'reported_available_credit',
+          'available_balance',
+          'calculated_limit_minus_balance_if_not_reported',
+        ]);
+        // Unknown when the source does not report it; never substitute the book balance.
+        const availableBalance = rawAvail !== undefined ? parseFinancialAmount(rawAvail) : null;
 
         const rawLimit =
           normalizedRow.credit_limit !== undefined && normalizedRow.credit_limit !== ''
@@ -621,17 +667,8 @@ export function parseRecordTypeContent(
           (normalizedRow.available_credit_status || '').toString().toLowerCase().includes('closed') ||
           (normalizedRow.status_or_usage_notes || '').toString().toLowerCase().includes('closed account');
 
-        const explicitAccType = (normalizedRow.account_type || '').toString().toLowerCase();
-        const isSavings = explicitAccType === 'savings' || name.toLowerCase().includes('savings') || name.toLowerCase().includes('share');
-        const isDepository = explicitAccType === 'checking' || explicitAccType === 'savings' || explicitAccType === 'depository';
-        const isCredit = !isDepository && (
-          explicitAccType === 'credit' ||
-          explicitAccType === 'credit_card' ||
-          normalizedRow.card_name !== undefined ||
-          name.toLowerCase().includes('card') ||
-          name.toLowerCase().includes('credit') ||
-          creditLimit !== undefined
-        );
+        const accountKind = resolveSnapshotAccountKind(normalizedRow, name, creditLimit);
+        const isCredit = accountKind.type === 'credit';
 
         const connStatus = (normalizedRow.connection_status || '').toString().toLowerCase();
         const freshnessStatus = (normalizedRow.data_freshness_status || '').toString().toLowerCase();
@@ -646,15 +683,8 @@ export function parseRecordTypeContent(
         const isReconOnly = treatment.includes('reconciliation-only') || name.toLowerCase().includes('reconciliation-only');
         const entity: FinancialEntity = isReconOnly ? 'unknown' : isBiz ? 'business' : 'personal';
 
-        const apr =
-          normalizedRow.interest_rate_percent !== undefined && normalizedRow.interest_rate_percent !== ''
-            ? parseFloat(normalizedRow.interest_rate_percent)
-            : normalizedRow.interest_rate ? parseFloat(normalizedRow.interest_rate) : undefined;
-
-        const minPay =
-          normalizedRow.minimum_payment !== undefined && normalizedRow.minimum_payment !== ''
-            ? parseFloat(normalizedRow.minimum_payment)
-            : normalizedRow.monthly_payment ? parseFloat(normalizedRow.monthly_payment) : undefined;
+        const apr = parseOptionalNumber(firstPresent(normalizedRow, ['interest_rate_percent', 'interest_rate']));
+        const minPay = parseOptionalNumber(firstPresent(normalizedRow, ['minimum_payment', 'monthly_payment']));
 
         const accountSnapshot: Account = {
           id: accId,
@@ -662,13 +692,13 @@ export function parseRecordTypeContent(
           officialName: (normalizedRow.official_name || `${name} Snapshot`).toString().trim(),
           institution,
           mask,
-          type: isCredit ? 'credit' : 'depository',
-          subtype: isCredit ? 'credit_card' : isSavings ? 'savings' : 'checking',
+          type: accountKind.type,
+          subtype: accountKind.subtype,
           currentBalance,
           availableBalance,
           creditLimit,
-          interestRate: apr !== undefined && !isNaN(apr) ? apr : undefined,
-          monthlyPayment: minPay !== undefined && !isNaN(minPay) ? minPay : undefined,
+          interestRate: apr,
+          monthlyPayment: minPay,
           currency: (normalizedRow.currency || 'USD').toString().toUpperCase(),
           lastSyncedAt: nowIso,
           sourceBalanceTimestamp: nowIso,
@@ -741,8 +771,8 @@ export function parseRecordTypeContent(
 
         const rawBal = normalizedRow.balance || normalizedRow.current_balance || normalizedRow.amount || 0;
         const currentBalance = typeof rawBal === 'number' ? rawBal : Math.abs(parseFinancialAmount(rawBal));
-        const rate = parseFloat(normalizedRow.interest_rate || normalizedRow.rate || '0') || 0;
-        const payment = parseFloat(normalizedRow.monthly_payment || normalizedRow.payment || '0') || 0;
+        const rate = parseOptionalNumber(firstPresent(normalizedRow, ['interest_rate', 'rate'])) ?? 0;
+        const payment = parseOptionalNumber(firstPresent(normalizedRow, ['monthly_payment', 'payment'])) ?? 0;
 
         const loanAccount: Account = {
           id: accId,

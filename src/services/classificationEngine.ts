@@ -14,7 +14,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_income_stripe',
     name: 'Stripe Payout Rule',
-    pattern: /stripe\s*payout|stripe\s*payments/i,
+    pattern: /\b(?:stripe\s*payout|stripe\s*payments)\b/i,
     classification: 'income',
     confidence: 0.99,
     reasoning: 'Merchant matches Stripe payment gateway processor payouts.',
@@ -22,7 +22,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_income_client_wire',
     name: 'Client Wire Deposit',
-    pattern: /client\s*wire|customer\s*deposit|invoice\s*pymt|ach\s*credit\s*client/i,
+    pattern: /\b(?:client\s*wire|customer\s*deposit|invoice\s*pymt|ach\s*credit\s*client)\b/i,
     classification: 'income',
     confidence: 0.95,
     reasoning: 'Customer invoice payment or inbound wire received.',
@@ -31,7 +31,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_debt_sba',
     name: 'SBA Loan Installment Rule',
-    pattern: /sba\s*loan|eidl\s*payment|commercial\s*loan\s*pmt/i,
+    pattern: /\b(?:sba\s*loan|eidl\s*payment|commercial\s*loan\s*pmt)\b/i,
     classification: 'debt_payment',
     confidence: 0.98,
     reasoning: 'Fixed principal/interest installment for SBA commercial term loan.',
@@ -39,7 +39,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_debt_card_pmt',
     name: 'Credit Card Bill Payment',
-    pattern: /autopay\s*amex|chase\s*credit\s*crd\s*epay|capital\s*one\s*autopay|card\s*payment/i,
+    pattern: /\b(?:autopay\s*amex|chase\s*credit\s*crd\s*epay|capital\s*one\s*autopay|card\s*payment)\b/i,
     classification: 'debt_payment',
     confidence: 0.98,
     reasoning: 'Settlement of revolving credit card statement balance.',
@@ -48,7 +48,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_biz_payroll',
     name: 'Payroll & Benefits Rule',
-    pattern: /gusto\s*payroll|rippling|adp\s*total|paychex/i,
+    pattern: /\b(?:gusto\s*payroll|rippling|adp\s*total|paychex)\b/i,
     classification: 'business',
     confidence: 0.99,
     reasoning: 'Certified business payroll, tax withholding, and employee benefits disbursement.',
@@ -56,7 +56,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_biz_cloud',
     name: 'Cloud Infrastructure Rule',
-    pattern: /amazon\s*web\s*services|aws|google\s*cloud|azure|digitalocean|cloudflare|vercel/i,
+    pattern: /\b(?:amazon\s*web\s*services|aws|google\s*cloud|azure|digitalocean|cloudflare|vercel)\b/i,
     classification: 'business',
     confidence: 0.99,
     reasoning: 'Core SaaS/cloud production server infrastructure expense.',
@@ -64,7 +64,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_biz_productivity',
     name: 'Team Productivity & Software Rule',
-    pattern: /google\s*workspace|github|slack|figma|notion|hubspot|zoom|quickbooks|linear/i,
+    pattern: /\b(?:google\s*workspace|github|slack|figma|notion|hubspot|zoom|quickbooks|linear)\b/i,
     classification: 'business',
     confidence: 0.98,
     reasoning: 'Essential software tooling and corporate SaaS subscription.',
@@ -72,7 +72,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_biz_office',
     name: 'Workspace & Rent Rule',
-    pattern: /wework|industrious|regus|commercial\s*properties|office\s*lease/i,
+    pattern: /\b(?:wework|industrious|regus|commercial\s*properties|office\s*lease)\b/i,
     classification: 'business',
     confidence: 0.97,
     reasoning: 'Physical commercial office facilities and coworking rent.',
@@ -80,7 +80,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_biz_travel',
     name: 'Business Travel Rule',
-    pattern: /delta\s*air|united\s*airlines|american\s*airlines|marriott|hilton|hyatt/i,
+    pattern: /\b(?:delta\s*air(?:lines)?|united\s*airlines|american\s*airlines|marriott|hilton|hyatt)\b/i,
     classification: 'business',
     confidence: 0.88,
     reasoning: 'Commercial airline or hotel stay during business operations.',
@@ -89,7 +89,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_pers_entertainment',
     name: 'Personal Entertainment Rule',
-    pattern: /steam\s*games|playstation|nintendo|netflix|spotify\s*personal|disney\+/i,
+    pattern: /\b(?:steam\s*games|playstation|nintendo|netflix|spotify\s*personal)\b|\bdisney(?:\+|\s*plus\b)/i,
     classification: 'personal',
     confidence: 0.98,
     reasoning: 'Consumer digital media and personal gaming entertainment.',
@@ -97,7 +97,7 @@ const TAXONOMY_RULES: PatternRule[] = [
   {
     id: 'rule_pers_groceries',
     name: 'Personal Groceries Rule',
-    pattern: /trader\s*joe|whole\s*foods|safeway|kroger|costco\s*wholesale/i,
+    pattern: /\b(?:trader\s*joe'?s?|whole\s*foods|safeway|kroger|costco\s*wholesale)\b/i,
     classification: 'personal',
     confidence: 0.92,
     reasoning: 'Consumer household food and supermarket provisioning.',

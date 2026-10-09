@@ -24,7 +24,7 @@ bin/
 *.exe
 
 # Local Data, Temporary Files & Backups
-data/
+/data/
 screenshots/
 cred_*.txt
 
