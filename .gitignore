@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies & Build Outputs
+node_modules
+dist
+dist-ssr
+*.local
+
+# Environment & Sensitive Keys
+.env
+.env.*
+!.env.example
+.agents/
+
+# Binaries & Downloaded Tools
+bin/
+*.exe
+
+# Local Data, Temporary Files & Backups
+data/
+screenshots/
+cred_*.txt
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
