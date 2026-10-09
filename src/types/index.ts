@@ -19,7 +19,8 @@ export type AccountSubtype =
   | 'credit_card' 
   | 'term_loan' 
   | 'sba_loan' 
-  | 'line_of_credit';
+  | 'line_of_credit'
+  | 'brokerage';
 
 export type FinancialEntity = 'business' | 'personal' | 'household' | 'owner_draw' | 'unknown';
 

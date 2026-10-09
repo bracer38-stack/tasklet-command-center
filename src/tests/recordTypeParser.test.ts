@@ -388,3 +388,103 @@ transaction,2026-10-05,Adv Relationship Banking,6a0kApY5MqFYxyvNmLa8Snxw45zERrtA
     expect(summary.variance?.explanation).toContain('100% match');
   });
 });
+
+describe('recordTypeParser amount, account-type and numeric parsing fixes', () => {
+  it('accepts inflows from separate Debit/Credit columns when the debit cell is blank', () => {
+    const csv = `date,transaction_id,account,description,debit,credit
+2026-10-01,t1,Chase Checking,Coffee,4.50,
+2026-10-02,t2,Chase Checking,Payroll Deposit,,"2,500.00"
+2026-10-03,t3,Chase Checking,Merchant Refund,,12.00`;
+
+    const summary = parseRecordTypeContent(csv);
+
+    expect(summary.rejectedCount).toBe(0);
+    expect(summary.parsedTransactions.map((t) => t.amount)).toEqual([4.5, -2500, -12]);
+    expect(summary.variance!.rawDebits).toBe(4.5);
+    expect(summary.variance!.rawCredits).toBe(2512);
+    expect(summary.variance!.deltaCredits).toBe(0);
+  });
+
+  it('rejects ambiguous or non-numeric debit/credit amounts', () => {
+    const csv = `date,transaction_id,account,description,debit,credit
+2026-10-01,t1,Chase Checking,Both Sides,10.00,10.00
+2026-10-02,t2,Chase Checking,Garbage,abc,`;
+
+    const summary = parseRecordTypeContent(csv);
+
+    expect(summary.parsedTransactions.length).toBe(0);
+    expect(summary.rejectedCount).toBe(2);
+  });
+
+  it('classifies the sample Amex snapshot as a credit card, not checking cash', () => {
+    const summary = parseRecordTypeContent(generateSampleRecordTypeCsv());
+    const amex = summary.parsedAccounts.find((a) => a.id === 'acc_amex_biz')!;
+    const chase = summary.parsedAccounts.find((a) => a.id === 'acc_chase_op')!;
+
+    expect(amex.type).toBe('credit');
+    expect(amex.subtype).toBe('credit_card');
+    expect(chase.type).toBe('depository');
+    expect(chase.subtype).toBe('checking');
+  });
+
+  it('uses Plaid account type/subtype and leaves unreported available balances null', () => {
+    const plaidJson = JSON.stringify({
+      accounts: [
+        { account_id: 'p_mort', name: 'Home Mortgage', type: 'loan', subtype: 'mortgage', balances: { current: 250000, available: null, limit: null } },
+        { account_id: 'p_401k', name: 'Fidelity 401k', type: 'investment', subtype: '401k', balances: { current: 80000, available: null, limit: null } },
+        { account_id: 'p_card', name: 'Sapphire Reserve', type: 'credit', subtype: 'credit card', balances: { current: 1200, available: 8800, limit: 10000 } },
+        { account_id: 'p_chk', name: 'Everyday', type: 'depository', subtype: 'checking', balances: { current: 500, available: null, limit: null } },
+        { account_id: 'p_sav', name: 'Rainy Day', type: 'depository', subtype: 'savings', balances: { current: 900, available: 0, limit: null } },
+      ],
+      transactions: [],
+    });
+
+    const summary = parseRecordTypeContent(plaidJson);
+    const byId = Object.fromEntries(summary.parsedAccounts.map((a) => [a.id, a]));
+
+    expect(byId.p_mort.type).toBe('loan');
+    expect(byId.p_mort.subtype).toBe('term_loan');
+    expect(byId.p_401k.type).toBe('investment');
+    expect(byId.p_401k.subtype).toBe('brokerage');
+    expect(byId.p_card.type).toBe('credit');
+    expect(byId.p_card.availableBalance).toBe(8800);
+    expect(byId.p_chk.type).toBe('depository');
+    expect(byId.p_chk.availableBalance).toBeNull();
+    expect(byId.p_sav.subtype).toBe('savings');
+    expect(byId.p_sav.availableBalance).toBe(0);
+  });
+
+  it('infers account type from names without mistaking credit unions for credit cards', () => {
+    const csv = `record_type,account_id,name,balance
+account_snapshot,acc_nfcu,Navy Federal Credit Union,1500.00
+account_snapshot,acc_loc,Business Line of Credit,20000.00
+account_snapshot,acc_sba,SBA Express Loan,50000.00
+account_snapshot,acc_venmo,Venmo Credit,300.00`;
+
+    const summary = parseRecordTypeContent(csv);
+    const byId = Object.fromEntries(summary.parsedAccounts.map((a) => [a.id, a]));
+
+    expect(byId.acc_nfcu.type).toBe('depository');
+    expect(byId.acc_loc.type).toBe('loan');
+    expect(byId.acc_loc.subtype).toBe('line_of_credit');
+    expect(byId.acc_sba.subtype).toBe('sba_loan');
+    expect(byId.acc_venmo.type).toBe('credit');
+  });
+
+  it('parses thousands separators, currency symbols and percent signs in loan and snapshot fields', () => {
+    const csv = `record_type,account_id,name,balance,interest_rate,monthly_payment,credit_limit,minimum_payment,interest_rate_percent
+loan,loan_1,Equipment Loan,"$85,000.00",6.25%,"1,420.00",,,
+account_snapshot,acc_card,Ink Business Card,"2,000.00",,,"10,000",$1035.50,24.99`;
+
+    const summary = parseRecordTypeContent(csv);
+
+    expect(summary.parsedLoans[0].currentBalance).toBe(85000);
+    expect(summary.parsedLoans[0].interestRate).toBe(6.25);
+    expect(summary.parsedLoans[0].monthlyPayment).toBe(1420);
+    const card = summary.parsedAccounts[0];
+    expect(card.creditLimit).toBe(10000);
+    expect(card.monthlyPayment).toBe(1035.5);
+    expect(card.interestRate).toBe(24.99);
+  });
+});
+
