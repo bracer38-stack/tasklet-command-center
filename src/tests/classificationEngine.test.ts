@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { classifyTransaction } from '../services/classificationEngine';
 import { cleanMerchantName } from '../services/normalization';
-import { Transaction } from '../types';
+import { detectAnomalies } from '../services/anomalyEngine';
+import { Account, Transaction } from '../types';
 
 function makeTx(description: string, amount = 25): Transaction {
   return {
@@ -69,4 +70,36 @@ describe('merchant brand normalization uses word boundaries', () => {
       );
     }
   );
+});
+
+describe('anomaly keyword checks use word boundaries', () => {
+  const account = (isBusiness: boolean): Account => ({
+    id: 'acc_test',
+    name: isBusiness ? 'Business Checking' : 'Personal Card',
+    officialName: 'Test',
+    institution: 'Test Bank',
+    mask: '0000',
+    type: isBusiness ? 'depository' : 'credit',
+    subtype: isBusiness ? 'checking' : 'credit_card',
+    currentBalance: 0,
+    availableBalance: null,
+    currency: 'USD',
+    lastSyncedAt: new Date().toISOString(),
+    isStale: false,
+    isBusiness,
+    status: 'active',
+  });
+  const anomalyTypes = (tx: Transaction, isBusiness: boolean) =>
+    detectAnomalies([tx], [account(isBusiness)])[0].anomalies.map((a) => a.type);
+
+  it('flags real work vendors on a personal card but not lookalike merchants', () => {
+    expect(anomalyTypes(makeTx('AWS EMEA'), false)).toContain('classification_anomaly');
+    expect(anomalyTypes(makeTx('SHAWS SUPERMARKET'), false)).not.toContain('classification_anomaly');
+    expect(anomalyTypes(makeTx('PAWS PET SUPPLY'), false)).not.toContain('classification_anomaly');
+  });
+
+  it('still matches keywords ending in punctuation such as disney+', () => {
+    const tx = { ...makeTx('DISNEY+ SUBSCRIPTION'), classification: 'business' as const };
+    expect(anomalyTypes(tx, true)).toContain('classification_anomaly');
+  });
 });

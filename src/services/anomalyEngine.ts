@@ -22,6 +22,16 @@ const PERSONAL_EXPENSE_KEYWORDS = [
   'equinox',
 ];
 
+const WORK_VENDOR_KEYWORDS = ['aws', 'github', 'wework'];
+
+// Whole-word match so e.g. 'aws' does not match 'shaws'.
+function containsKeyword(text: string, keyword: string): boolean {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const start = /^\w/.test(keyword) ? '\\b' : '';
+  const end = /\w$/.test(keyword) ? '\\b' : '';
+  return new RegExp(`${start}${escaped}${end}`).test(text);
+}
+
 export function detectAnomalies(
   transactions: Transaction[],
   accounts: Account[]
@@ -124,7 +134,7 @@ export function detectAnomalies(
 
     // Classification Anomaly: Personal keyword on Business Account
     const descLower = `${tx.rawDescription} ${tx.cleanMerchant}`.toLowerCase();
-    const isPersonalKeyword = PERSONAL_EXPENSE_KEYWORDS.some((kw) => descLower.includes(kw));
+    const isPersonalKeyword = PERSONAL_EXPENSE_KEYWORDS.some((kw) => containsKeyword(descLower, kw));
 
     if (acc?.isBusiness && isPersonalKeyword && tx.classification === 'business') {
       if (!tx.anomalies.some((a) => a.type === 'classification_anomaly')) {
@@ -140,7 +150,7 @@ export function detectAnomalies(
     }
 
     // Business expense on Personal Account without reimbursement flag
-    if (!acc?.isBusiness && (descLower.includes('aws') || descLower.includes('github') || descLower.includes('wework')) && tx.classification !== 'reimbursement') {
+    if (!acc?.isBusiness && WORK_VENDOR_KEYWORDS.some((kw) => containsKeyword(descLower, kw)) && tx.classification !== 'reimbursement') {
       if (!tx.anomalies.some((a) => a.type === 'classification_anomaly')) {
         tx.anomalies.push({
           id: `anom_reimb_${tx.id}`,
