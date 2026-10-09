@@ -24,6 +24,29 @@ const CLEANUP_PATTERNS = [
   /\s+[A-Z]{2}\s+\d{5}.*/i, // City, State Zip
 ];
 
+// Whole-word matches only, so e.g. 'aws' does not match 'SHAWS' or 'PAWS'.
+const BRAND_RULES: Array<[RegExp, string]> = [
+  [/\b(?:aws|amazon\s*web\s*services)\b/, 'Amazon Web Services'],
+  [/\b(?:google|gsuite|workspace)\b/, 'Google Workspace'],
+  [/\bgithub\b/, 'GitHub'],
+  [/\bslack\b/, 'Slack Technologies'],
+  [/\bstripe\b/, 'Stripe Payments'],
+  [/\bgusto\b/, 'Gusto Payroll'],
+  [/\b(?:quickbooks|intuit)\b/, 'QuickBooks Online'],
+  [/\bfigma\b/, 'Figma'],
+  [/\bnotion\b/, 'Notion Labs'],
+  [/\bhubspot\b/, 'HubSpot'],
+  [/\bzoom\b/, 'Zoom Video'],
+  [/\bdelta\s*air|\bdelta\.com\b/, 'Delta Air Lines'],
+  [/\buber\s*eats\b/, 'Uber Eats'],
+  [/\buber\b/, 'Uber'],
+  [/\bwework\b/, 'WeWork'],
+  [/\b(?:amex|american\s*express)\b/, 'American Express'],
+  [/\bchase\s*(?:card|credit)\b/, 'Chase Credit Card'],
+  [/\bcapital\s*one\b/, 'Capital One'],
+  [/\bmercury\b/, 'Mercury Bank'],
+];
+
 export function cleanMerchantName(rawName: string, rawDescription?: string): string {
   if (!rawName && !rawDescription) return 'Unknown Merchant';
   
@@ -39,25 +62,9 @@ export function cleanMerchantName(rawName: string, rawDescription?: string): str
 
   // Known brand normalization dictionary (run first to avoid stripping words like 'web' in AWS)
   const lower = name.toLowerCase();
-  if (lower.includes('aws') || lower.includes('amazon web services')) return 'Amazon Web Services';
-  if (lower.includes('google') || lower.includes('gsuite') || lower.includes('workspace')) return 'Google Workspace';
-  if (lower.includes('github')) return 'GitHub';
-  if (lower.includes('slack')) return 'Slack Technologies';
-  if (lower.includes('stripe')) return 'Stripe Payments';
-  if (lower.includes('gusto')) return 'Gusto Payroll';
-  if (lower.includes('quickbooks') || lower.includes('intuit')) return 'QuickBooks Online';
-  if (lower.includes('figma')) return 'Figma';
-  if (lower.includes('notion')) return 'Notion Labs';
-  if (lower.includes('hubspot')) return 'HubSpot';
-  if (lower.includes('zoom')) return 'Zoom Video';
-  if (lower.includes('delta air') || lower.includes('delta.com')) return 'Delta Air Lines';
-  if (lower.includes('uber') && !lower.includes('eats')) return 'Uber';
-  if (lower.includes('uber eats')) return 'Uber Eats';
-  if (lower.includes('wework')) return 'WeWork';
-  if (lower.includes('amex') || lower.includes('american express')) return 'American Express';
-  if (lower.includes('chase card') || lower.includes('chase credit')) return 'Chase Credit Card';
-  if (lower.includes('capital one')) return 'Capital One';
-  if (lower.includes('mercury')) return 'Mercury Bank';
+  for (const [pattern, brand] of BRAND_RULES) {
+    if (pattern.test(lower)) return brand;
+  }
 
   // Strip store numbers and trailing junk
   for (const pattern of CLEANUP_PATTERNS) {

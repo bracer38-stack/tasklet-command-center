@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classifyTransaction } from '../services/classificationEngine';
+import { cleanMerchantName } from '../services/normalization';
 import { Transaction } from '../types';
 
 function makeTx(description: string, amount = 25): Transaction {
@@ -11,7 +12,7 @@ function makeTx(description: string, amount = 25): Transaction {
     date: '2026-10-01',
     rawDescription: description,
     merchantName: description,
-    cleanMerchant: description,
+    cleanMerchant: cleanMerchantName(description),
     amount,
     currency: 'USD',
     pending: false,
@@ -46,4 +47,26 @@ describe('classification keyword matching uses word boundaries', () => {
   ])('does not match keyword fragments inside "%s"', (description) => {
     expect(classifyTransaction(makeTx(description)).classification).toBe('needs_review');
   });
+});
+
+describe('merchant brand normalization uses word boundaries', () => {
+  it.each([
+    ['AMAZON WEB SERVICES AWS.AMAZON.COM WA', 'Amazon Web Services'],
+    ['AWS EMEA', 'Amazon Web Services'],
+    ['GOOGLE *WORKSPACE G.CO/HELPPAY#', 'Google Workspace'],
+    ['SQ *ZOOM.US', 'Zoom Video'],
+    ['UBER EATS 8005928996', 'Uber Eats'],
+    ['UBER *TRIP', 'Uber'],
+  ])('normalizes "%s" to %s', (raw, expected) => {
+    expect(cleanMerchantName(raw)).toBe(expected);
+  });
+
+  it.each(['SHAWS SUPERMARKET', 'PAWS PET SUPPLY', 'LAWSON STATION', 'TUBERS FARM STAND'])(
+    'does not map "%s" to a known brand',
+    (raw) => {
+      expect(cleanMerchantName(raw)).toBe(
+        raw.split(' ').map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(' ')
+      );
+    }
+  );
 });
